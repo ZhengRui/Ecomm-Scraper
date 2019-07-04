@@ -34,3 +34,10 @@ So far, we have the taxonomy tree, and each leaf node's products with images and
 
 ### Scale up
 
+The scraper can run within the docker:
+```bash
+cd scraper
+docker-compose up -d
+docker-compose scale worker=10
+```
+
