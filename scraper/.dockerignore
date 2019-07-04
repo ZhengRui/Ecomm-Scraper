@@ -1,0 +1,8 @@
+node_modules
+visualize
+taxonomy/*
+proxy/proxy.txt
+proxy/proxy-whitepool.txt
+proxy/scrapoxy_config.json
+*.rdb
+.*

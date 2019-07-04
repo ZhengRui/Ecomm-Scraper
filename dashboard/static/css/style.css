@@ -1,0 +1,83 @@
+body {
+    font-family: sans-serif;
+}
+
+#panel {
+    position: fixed;
+    left: 5px;
+    top: 5px;
+    z-index: 1;
+}
+
+#chart {
+    height: 4000px;
+}
+
+.node rect {
+    cursor: move;
+    shape-rendering: crispEdges;
+}
+
+.node text {
+    pointer-events: none;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.link {
+    fill: none;
+    stroke: #ccc;
+}
+
+svg {
+    position: fixed;
+    z-index: 0;
+}
+
+#layer-collection {
+    position: fixed;
+    z-index: 1;
+    right: 40px;
+    top: 100px;
+}
+
+#addLayerBtn {
+    display: inline-block;
+}
+
+#impExpBtn {
+    margin-left: 10px;
+}
+
+.layer {
+    border: 2px solid #2AAEA7;
+    padding: 10px;
+    border-radius: 50px;
+    font-size: 12px;
+    font-weight: bold;
+    text-align: center;
+    background-color: white;
+    margin: 2px;
+}
+
+.layer:hover {
+    background-color: #2AAEA7;
+    color: white;
+}
+
+.selected {
+    background-color: #2AAEA7;
+    color: white;
+}
+
+.toolset {
+    position: absolute;
+    z-index: 1;
+}
+
+.undoredobtn {
+    position: fixed;
+    z-index: 1;
+    right: 40px;
+    bottom: 100px;
+}

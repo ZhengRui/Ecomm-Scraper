@@ -1,0 +1,767 @@
+<CTYPE HTML PUBLIC '-//W3C//DTD HTML 4.01//EN'>
+<html lang='en'>
+<html xmlns='http://www.w3.org/1999/xhtml'>
+
+<title>Markable Training Dashboard</title>
+
+<head>
+  <meta charset='UTF-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1, shrink-to-fit=no'>
+
+  <link rel='stylesheet' href='static/css/bootstrap-4.2.1.min.css'>
+  <link rel='stylesheet' href='https://use.fontawesome.com/releases/v5.8.1/css/all.css' integrity='sha384-50oBUHEmvpQ+1lW4y57PTFmhCaXp0ML5d60M1M7uH2+nqUivzIebhndOJK28anvf' crossorigin='anonymous'>
+  <link rel='stylesheet' href='static/css/style.css'>
+
+  <script src='static/js/react-16.4.1.min.js'></script>
+  <script src='static/js/react-dom-16.4.1.min.js'></script>
+  <script src='static/js/babel.min.js'></script>
+  <script src='static/js/d3.v4.min.js'></script>
+  <script src='static/js/crypto-3.1.9-1.min.js'></script>
+  <script src='static/js/FileSaver.js'></script>
+  <!-- <script src='static/js/jquery-3.3.1.min.js'></script> -->
+  <!-- <script src='static/js/popper-1.14.6.min.js'></script> -->
+  <!-- <script src='static/js/bootstrap-4.2.1.min.js'></script> -->
+</head>
+
+<body>
+
+  <div id='dashboard'></div>
+
+  <script type='text/babel'>
+
+    const mkbcolor = '#2AAEA7'
+    const deep = false
+
+    const parseTree = (treedata) => {
+      let nodes = []
+      let links = []
+
+      let nodes_ = {}
+      Object.entries(treedata).forEach(([tgt_hash, info], i) => {
+        const path = info.path.split(',')
+        let src, tgt
+
+        if (!nodes_.hasOwnProperty(tgt_hash)) {
+          tgt = {id: tgt_hash, name: info.name, depth: path.length-1, url: info.url}
+          nodes.push(tgt)
+          nodes_[tgt_hash] = tgt
+        }
+        tgt = nodes_[tgt_hash]
+
+        if (path.length-1) {
+          const src_hash = path[path.length-2]
+          if (!nodes_.hasOwnProperty(src_hash)) {
+            src = {id: src_hash, name: treedata[src_hash].name, depth: path.length-2, url: treedata[src_hash].url}
+            nodes.push(src)
+            nodes_[src_hash] = src
+          }
+          src = nodes_[src_hash]
+
+          links.push({source: src, target: tgt, value: 1})
+        }
+      })
+
+      return {nodes, links}
+    }
+
+    const chartMargin = {
+      top: 1,
+      right: 50,
+      bottom: 6,
+      left: 1
+    }
+
+    const convertToHierarchy = ({nodes, links}) => {
+      return [{...nodes.filter(d => d.depth === 0)[0], parent: ''}, ...links.reduce((agg, l) =>
+        {agg.push({...l.target, parent: l.source.id}); return agg}, [])]
+    }
+
+    const hlTreeNode = (node, on=true, deep=false, direction='lr') => {
+      d3.selectAll('circle')
+        .filter((d, i) => d.id == node.id)
+        .attr('r', on ? 10 : 8)
+        .style('fill', on ? '#d159cc' : mkbcolor)
+
+      if (direction === 'r' || direction === 'lr') {
+        d3.selectAll('.link')
+          .filter((d, i) => d.source.id == node.id)
+          .style('stroke', on ? mkbcolor : '#ccc')
+          .style('stroke-width', on ? 3 : 1)
+
+        if (node.children) {
+          node.children.forEach(childnode => {
+            d3.selectAll('circle')
+              .filter((d, i) => d.id == childnode.id)
+              .attr('r', on ? 10 : 8)
+              .style('fill', on ? '#d159cc' : mkbcolor)
+
+            if (deep) hlTreeNode(childnode, on, deep, 'r')
+          })
+        }
+      }
+
+      if (direction === 'l' || direction === 'lr') {
+        d3.selectAll('.link')
+          .filter((d, i) => d.target.id == node.id)
+          .style('stroke', on ? mkbcolor : '#ccc')
+          .style('stroke-width', on ? 3 : 1)
+
+        const parentnode = node.parent
+        if (parentnode) {
+          d3.selectAll('circle')
+            .filter((d, i) => d.id == parentnode.id)
+            .attr('r', on ? 10 : 8)
+            .style('fill', on ? '#d159cc' : mkbcolor)
+
+          if (deep) hlTreeNode(parentnode, on, deep, 'l')
+        }
+      }
+
+    }
+
+    const hlTreeLink = (link, on=true, deep=false, direction='lr') => {
+      d3.selectAll('.link')
+        .filter((d, i) => d.source.id == link.source.id && d.target.id == link.target.id)
+        .style('stroke', on ? mkbcolor : '#ccc')
+        .style('stroke-width', on ? 3 : 1)
+
+      if (!deep) {
+        d3.selectAll('circle')
+          .filter((d, i) => d.id == link.source.id || d.id == link.target.id)
+          .attr('r', on ? 10 : 8)
+          .style('fill', on ? '#d159cc' : mkbcolor)
+        return
+      }
+
+      if (direction === 'r' || direction === 'lr')
+        hlTreeNode(link.target, on, deep, 'r')
+      if (direction === 'l' || direction === 'lr')
+        hlTreeNode(link.source, on, deep, 'l')
+    }
+
+    const popLayer = (layer) => {
+      const svgs = [ ...document.querySelectorAll('svg') ]
+      svgs.map(svg => {
+        svg.style.visibility = svg.getAttribute('id') === layer ? 'visible' : 'hidden'
+      })
+    }
+
+    const updateTree = (layer, treedata) => {
+      const root = d3.stratify()
+                      .id(d => d.id)
+                      .parentId(d => d.parent)
+                      (convertToHierarchy(treedata))
+                      .sort((a, b) => a.data.name.toLowerCase().localeCompare(b.data.name.toLowerCase()))
+
+      let levelNumOfNodes = [1]
+      let numOfLevels = 1
+      const childCount = (level, node) => {
+        numOfLevels = Math.max(level+1, numOfLevels)
+
+        if (node.children && node.children.length > 0) {
+          if (levelNumOfNodes.length <= level + 1) levelNumOfNodes.push(0)
+
+          levelNumOfNodes[level + 1] += node.children.length
+          node.children.forEach(d => childCount(level + 1, d))
+        }
+      }
+      childCount(0, root)
+
+      // because the tree is vertical, not horizontal, so its width is actually yrange, and height is actually xrange
+      const width = Math.max(d3.max(levelNumOfNodes) * 36, 1000)
+      const height = Math.max(500 * numOfLevels, 2000)
+
+      const tree = d3.tree()
+                      .size([width - chartMargin.left - chartMargin.right, height - chartMargin.top - chartMargin.bottom])
+
+      // calculate nodes/links positions
+      tree(root)
+
+      const layerExisted = !d3.select('svg#'+layer).empty()
+      const svg = layerExisted ?
+                  d3.select('svg#'+layer).select('g') : (d3.select('#chart').append('svg')
+                                              .attr('width', height)
+                                              .attr('height', width)
+                                              .attr('id', layer)
+                                              .call(d3.zoom().on('zoom', () => {
+                                                svg.attr('transform', d3.event.transform)
+                                              }))
+                                              .append('g')
+                                              .attr('transform', 'translate(' + chartMargin.left + ',' + chartMargin.top + ')'))
+
+      // bind data to tree
+      const links = svg.selectAll('.link')
+                      .data(root.links(), d => d.target.id)
+      const nodes = svg.selectAll('.node')
+                      .data(root.descendants(), d => d.id)
+
+      // new links
+      const linksNew = links.enter().append('path')
+                            .attr('class', 'link')
+                            // .attr('fill','none')   // overwritten by header style
+                            // .attr('stroke','#ccc')
+
+      const linksMerged = linksNew.merge(links)
+              .on('mouseover', (d,i) => {
+                hlTreeLink(d, true, deep)
+              })
+              .on('mouseout', (d,i) => {
+                hlTreeLink(d, false, deep)
+              })
+              .transition()
+              .duration(layerExisted ? 500 : 0)
+              .attr('d', d => 'M' + d.source.y + ',' + d.source.x
+                    + 'C' + (d.source.y +100) + ',' + d.source.x
+                    + ' ' + (d.source.y +100) + ',' + d.target.x
+                    + ' ' + d.target.y + ',' + d.target.x)
+
+      // new nodes
+      const nodesNew = nodes.enter().append('g')
+
+      if (layerExisted)
+        nodesNew.attr('transform', d => 'translate(' + (d.parent ? d.parent.y : d.y) + ',' + (d.parent ? d.parent.x : d.x) + ')')
+
+      const nodesMerged = nodesNew.merge(nodes)
+              .attr('class', d => 'node' + (d.children ? ' node--internal' : ' node--leaf'))
+              .on('click', (d,i) => {let win = window.open(d.data.url, '_blank'); win.focus()})
+
+      nodesMerged.transition()
+          .duration(layerExisted ? 500 : 0)
+          .attr('transform', d => 'translate(' + d.y + ',' + d.x + ')')
+
+      nodesNew.append('circle')
+          .append('svg:title')
+      nodesMerged.select('circle')
+          .attr('r', 8)
+          .style('fill', mkbcolor)
+          // .style('opacity', .5)
+          .on('mouseover', (d, i) => {
+            hlTreeNode(d, true, deep)
+          })
+          .on('mouseout', (d, i) => {
+            hlTreeNode(d, false, deep)
+          })
+          .text(d => d.data.url)
+
+      nodesNew.append('text')
+      nodesMerged.select('text')
+          .text(d => d.data.name)
+          // .attr('y',5)
+          // .attr('x', 80)
+          .attr('y', 5)
+          .attr('x', d => d.children ? -13 : 13)
+          .attr('text-anchor', d => d.children ? 'end' : 'start')
+
+      // exit links
+      const linksExit = links.exit().remove()
+
+      // exit nodes
+      const nodesExit = nodes.exit().remove()
+
+      popLayer(layer)
+
+      return nodesNew
+    }
+
+    class AddLayerBtn extends React.Component {
+      state = {layers: [], isloading: false, isopen: false}
+
+      listLayers = () => {
+        this.props.showToolSet({visible: false})
+
+        fetch('get_listof_taxonomy')
+        .then((response) => response.json())
+        .then((data) => {
+          if (data['succeed'] === 1) {
+            this.setState(prevState => ({
+              layers: data['layers'],
+              isopen: !prevState.isopen
+            }))
+          } else {
+            alert(data['error'])
+          }
+        })
+        .catch(err => console.log('Fetch list of taxonomy error: ' + err))
+      }
+
+      addLayer = ({target: {textContent: selectedLayer}}) => {
+        this.setState({
+          isloading: true
+        }, () => {
+          let formData = new FormData()
+          formData.append('layer', selectedLayer)
+
+          fetch('get_taxonomy', {
+            method: 'POST',
+            body: formData
+          })
+          .then((response) => response.json())
+          .then((data) => {
+            if (data['succeed'] === 1) {
+              let {taxonomy} = data
+
+              Object.entries(taxonomy).map(([nodehash, nodedata]) => {
+                if (nodedata.hasOwnProperty('pathBorn')) return
+                taxonomy[nodehash]['pathBorn'] = nodedata['path']
+              })
+
+              let treedata = parseTree(taxonomy)
+
+              // right click on node to show toolset
+              const nodesNew = updateTree(selectedLayer, treedata)
+              nodesNew.on('contextmenu', (d) => {
+                this.props.showToolSet({
+                  visible:true,
+                  left:(d3.event.pageX - 30) + 'px',
+                  top:(d3.event.pageY - 30) + 'px'
+                }, d.id)
+                d3.event.preventDefault()
+              })
+
+              // click on svg to hide toolset
+              d3.selectAll('svg').on('click', () => {
+                this.props.showToolSet({visible: false})
+
+                d3.selectAll('circle')
+                  .attr('r', 8)
+                  .style('fill', mkbcolor)
+              })
+
+              this.setState({
+                isloading: false
+              }, () => {
+                this.props.postAddLayer(selectedLayer)
+                this.props.addTreeData({[selectedLayer]: taxonomy})
+              })
+            } else {
+              alert(data['error'])
+            }
+          })
+          .catch(err => console.log('Fetch taxonomy error: ' + err))
+          })
+      }
+
+      openImportDialog = () => {
+        document.getElementById('import').value = null
+        document.getElementById('import').click()
+      }
+
+      render = () => (
+        <React.Fragment>
+          <div id='addLayerBtn'>
+            <button type='button' className='btn btn-light' aria-expanded={ this.state.isopen ? 'true' : 'false'}  onClick={this.listLayers} onBlur={this.listLayers}>
+              {this.state.isloading ? (
+                <span className='spinner-border spinner-border-sm'></span>
+              ) : (
+                <span className='fas fa-plus-circle'></span>
+              )}
+            </button>
+            <div className={ this.state.isopen ? 'dropdown-menu show' : 'dropdown-menu' } x-placement='bottom-start' style={ {position: 'absolute', 'will-change': 'transform', top: '0px', left: '0px', transform: 'translate3d(5px, 30px, 0px)'} }>
+              {
+                this.state.layers.map((layer) => <a className='dropdown-item' onClick={this.addLayer}>{layer}</a>)
+              }
+            </div>
+          </div>
+
+          <div id='impExpBtn' className='btn-group' role='group'>
+            <input type='file' id='import' hidden onChange={this.props.import}/>
+            <button type='button' className='btn btn-light' onClick={this.openImportDialog}>
+              <i className='fas fa-file-import' title='Import Taxonomy'></i>
+            </button>
+            <button type='button' className='btn btn-light' onClick={this.props.export}>
+              <i className='fas fa-file-export' title='Export Taxonomy'></i>
+            </button>
+          </div>
+        </React.Fragment>
+      )
+    }
+
+    class Layer extends React.Component {
+      onClick = ({target: {textContent: selectedLayer}}) => {
+        this.props.showToolSet({visible: false})
+        this.props.onSelectLayer(selectedLayer)
+      }
+
+      render = () => (
+        <div className={ this.props.selected ? 'layer selected' : 'layer' } onClick={this.onClick}>{this.props.layer}</div>
+      )
+    }
+
+    class LayerCollection extends React.Component {
+      render = () => (
+        <div id='layer-collection'>
+          {
+            this.props.layers.map(layer => (
+              <Layer layer={layer} selected={layer === this.props.selectedLayer} onSelectLayer={this.props.onSelectLayer} showToolSet={this.props.showToolSet}/>
+            ))
+          }
+        </div>
+      )
+    }
+
+    class ToolSet extends React.Component {
+      state = {naming: false, newname: '', renameOrSplit: null}
+
+      componentWillReceiveProps = () => {
+        this.setState({
+          naming: false,
+          newname: '',
+          renameOrSplit: null
+        })
+      }
+
+      enterNodeName = (renameOrSplit) => {
+        this.setState({
+          naming: true,
+          renameOrSplit
+        })
+      }
+
+      updateInput = ({target: {value: newname}}) => {
+        this.setState({
+          newname
+        })
+      }
+
+      renameOrSplitNode = () => {
+        switch (this.state.renameOrSplit) {
+          case 'rename':
+            this.props.renameNode(this.state.newname)
+            break
+          case 'split':
+            const newhash = CryptoJS.MD5(this.state.newname + ': ' + new Date().toString()).toString()
+            this.props.cloneFakeNode({
+              [newhash]: {
+                name: this.state.newname,
+                path: newhash,
+                pathBorn: newhash,
+                url: ''
+              }
+            })
+            this.props.mergeNode()
+            break
+          default:
+            alert('Neither renaming nor splitting node!')
+        }
+      }
+
+      render = () => (
+        <div className='toolset' style={ {display: this.props.toolset.visible ? 'block' : 'none', left: this.props.toolset.left, top: this.props.toolset.top} }>
+          <div className='btn-group' role='group' aria-label='ToolSet' style={ {display: this.state.naming ? 'none' : 'block'} }>
+            <button type='button' className='btn btn-info btn-sm' onClick={() => this.props.cutOrCloneNode(true)}>
+              <i className='fas fa-cut' title='Cut'></i>
+            </button>
+            <button type='button' className='btn btn-info btn-sm' onClick={() => this.props.mergeNode()}>
+              <i className='fas fa-code-branch fa-flip-vertical' title='Merge'></i>
+            </button>
+            <button type='button' className='btn btn-info btn-sm' onClick={() => this.props.cutOrCloneNode(false)}>
+              <i className='fas fa-clone' title='Clone'></i>
+            </button>
+            <button type='button' className='btn btn-info btn-sm' onClick={() => this.enterNodeName('split')}>
+              <i className='fas fa-code-branch' title='Split'></i>
+            </button>
+            <button type='button' className='btn btn-info btn-sm' onClick={() => this.enterNodeName('rename')}>
+              <i className='fas fa-font' title='Rename'></i>
+            </button>
+          </div>
+
+          <div className='input-group input-group-sm' style={ {display: this.state.naming ? 'inline-flex' : 'none', bottom: '16'} }>
+            <input type='text' className='form-control form-control-sm' aria-label='NewName' value={this.state.newname} onChange={this.updateInput}/>
+            <div className='input-group-append'>
+              <button type='button' className='btn btn-info btn-sm' onClick={this.renameOrSplitNode} disabled={this.state.newname === ''}><i class="fas fa-check"></i></button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    class RedoUndoBtn extends React.Component {
+      render = () => (
+        <div className='undoredobtn btn-group' role='group' aria-label='RedoUndoBtn'>
+          <button type='button' className='btn btn-info btn-lg' disabled={this.props.undoDisabled} onClick={this.props.onUndo}>
+            <i className='fas fa-undo' title='Undo'></i>
+          </button>
+          <button type='button' className='btn btn-info btn-lg' disabled={this.props.redoDisabled} onClick={this.props.onRedo}>
+            <i className='fas fa-redo' title='Redo'></i>
+          </button>
+        </div>
+      )
+    }
+
+    class Dashboard extends React.Component {
+      state = {layers:[], selectedLayer:null, selectedNode:null, toolset:{visible:false, left:'0px', top:'0px'},
+                undoDisabled:true, redoDisabled:true}
+
+      componentDidMount = () => {
+        this.treedata = {}
+        this.undostack = []
+        this.redostack = []
+        this.pastebuf = null
+      }
+
+      postAddLayer = (layer) => {
+        this.setState(prevState => ({
+          layers: [...prevState.layers.filter(l => l !== layer), layer],
+          selectedLayer: layer
+        }))
+      }
+
+      selectLayer = (layer) => {
+        this.setState({
+          selectedLayer: layer
+        }, () => {
+          popLayer(layer)
+        })
+      }
+
+      showToolSet = (toolset, selectedNode=null) => {
+        this.setState(prevState => ({
+          toolset: {...prevState.toolset, ...toolset},
+          selectedNode
+        }))
+      }
+
+      addTreeData = (treedata) => {
+        this.treedata = { ...this.treedata, ...treedata }
+      }
+
+      updateStacks = (mode, inverseOps) => {
+        switch (mode) {
+          case 'Editing':
+            this.undostack.push(inverseOps)
+            this.redostack = []
+            break
+          case 'Undoing':
+            this.redostack.push(inverseOps)
+            break
+          case 'Redoing':
+            this.undostack.push(inverseOps)
+            break
+          default:
+            alert('Invalid mode')
+        }
+
+        this.setState({
+          undoDisabled: this.undostack.length === 0,
+          redoDisabled: this.redostack.length === 0
+        })
+      }
+
+      cutOrCloneNode = (trueCut_falseClone, mode='Editing') => {
+        const curLayer = this.state.selectedLayer
+        const curLayerTaxo = this.treedata[curLayer]
+        const selectedNode = this.state.selectedNode
+
+        const agg = Object.entries(curLayerTaxo).reduce((agg, [nodehash, nodedata]) => {
+          if (nodedata.path.split(',').includes(selectedNode)) {
+            agg['removed'][nodehash] = nodedata
+          } else {
+            agg['kept'][nodehash] = nodedata
+          }
+          return agg
+        }, {kept: {}, removed: {}})
+
+        this.pastebuf = agg['removed']
+        this.showToolSet({visible:false})
+
+        if (trueCut_falseClone) {
+          this.treedata[curLayer] = agg['kept']
+          updateTree(curLayer, parseTree(this.treedata[curLayer]))
+
+          const apath = Object.values(this.pastebuf)[0]['path'].split(',')
+          const inverseOps = {
+            layer: curLayer,
+            data: agg['removed'],
+            nodehash: apath.find((nodehash, i) => {
+              return (i<apath.length-1) && (apath[i+1]===selectedNode)
+            }) || null
+          }
+
+          this.updateStacks(mode, inverseOps)
+        }
+      }
+
+      mergeNode = (mode='Editing') => {
+        this.showToolSet({visible:false})
+
+        if (this.pastebuf === null) return
+
+        const curLayer = this.state.selectedLayer
+        const curLayerTaxo = this.treedata[curLayer]
+        const selectedNode = this.state.selectedNode
+
+        const nodeConflicted = Object.keys(curLayerTaxo).filter(nodehash => this.pastebuf.hasOwnProperty(nodehash))
+        if (nodeConflicted.length) {
+          d3.selectAll('circle')
+            .filter((d, i) => nodeConflicted.includes(d.id))
+            .attr('r', 10)
+            .style('fill', '#dc143c')
+
+          return
+        }
+
+        const path_prefix_old = Object.values(this.pastebuf)[0]['path'].split(',').filter(nodehash => !Object.keys(this.pastebuf).includes(nodehash)).join()
+        const path_prefix_new = selectedNode === null ? '' : curLayerTaxo[selectedNode]['path']
+
+        this.treedata[curLayer] = { ...curLayerTaxo, ...Object.entries(this.pastebuf).reduce((agg, [nodehash, nodedata]) => {
+          // be careful don't change pastebuf content here, JS pass by reference,
+          // pastebuf is a reference to most recent cutted/cloned node maybe in another layer
+          agg[nodehash] = { ...nodedata, ...{ path: path_prefix_old ? nodedata['path'].replace(path_prefix_old, path_prefix_new) : [path_prefix_new, nodedata['path']].join() } }
+          return agg
+        }, {}) }
+
+        const nodesNew = updateTree(curLayer, parseTree(this.treedata[curLayer]))
+        nodesNew.on('contextmenu', (d) => {
+          this.showToolSet({
+            visible:true,
+            left:(d3.event.pageX - 30) + 'px',
+            top:(d3.event.pageY - 30) + 'px'
+          }, d.id)
+          d3.event.preventDefault()
+        })
+
+        const apath = Object.values(this.pastebuf)[0]['path']
+        const inverseOps = {
+          layer: curLayer,
+          data: null,
+          nodehash: (path_prefix_old !== '' ? apath.replace(path_prefix_old+',', '') : apath).split(',')[0]
+        }
+
+        this.updateStacks(mode, inverseOps)
+      }
+
+      renameNode = (newname, mode='Editing') => {
+        const curLayer = this.state.selectedLayer
+        const curLayerTaxo = this.treedata[curLayer]
+        const selectedNode = this.state.selectedNode
+
+        this.showToolSet({visible:false})
+        const oldname = curLayerTaxo[selectedNode]['name']
+        if (newname === oldname) return
+        this.treedata[curLayer][selectedNode]['name'] = newname
+        updateTree(curLayer, parseTree(this.treedata[curLayer]))
+
+        const inverseOps = {
+          layer: curLayer,
+          data: oldname,
+          nodehash: selectedNode
+        }
+
+        this.updateStacks(mode, inverseOps)
+      }
+
+      cloneFakeNode = (newnode) => {
+        this.pastebuf = newnode
+      }
+
+      undoOrRedo = (mode) => {
+        if (!['Undoing', 'Redoing'].includes(mode)) {
+          alert('Invalid mode')
+          return
+        }
+
+        return () => {
+          const { layer, data, nodehash } = mode === 'Undoing' ? this.undostack.pop() : this.redostack.pop()
+
+          this.setState({
+            selectedLayer: layer,
+            selectedNode: nodehash
+          }, () => {
+            if (data === null) {
+              this.cutOrCloneNode(true, mode)
+            } else if (typeof data === 'object') {
+              this.pastebuf = data
+              this.mergeNode(mode)
+            } else if (typeof data === 'string') {
+              this.renameNode(data, mode)
+            }
+          })
+        }
+      }
+
+      import = (e) => {
+        const filename = e.target.value.replace(/\\/g, '/').replace(/.*\//, '')
+        const newLayer = filename.split('.')[0].replace('_taxonomy', '')
+        const file = e.target.files[0]
+        const fileurl = URL.createObjectURL(file)
+
+        let formData = new FormData()
+        formData.append('file', file)
+        fetch('bounce_taxonomy', {
+          method: 'POST',
+          body: formData
+        })
+        .then((response) => response.json())
+        .then((data) => {
+          if (data['succeed'] === 1) {
+            let {taxonomy} = data
+
+            Object.entries(taxonomy).map(([nodehash, nodedata]) => {
+              if (nodedata.hasOwnProperty('pathBorn')) return
+              taxonomy[nodehash]['pathBorn'] = nodedata['path']
+            })
+
+            const treedata = parseTree(taxonomy)
+
+            // right click on node to show toolset
+            const nodesNew = updateTree(newLayer, treedata)
+            nodesNew.on('contextmenu', (d) => {
+              this.showToolSet({
+                visible:true,
+                left:(d3.event.pageX - 30) + 'px',
+                top:(d3.event.pageY - 30) + 'px'
+              }, d.id)
+              d3.event.preventDefault()
+            })
+
+            // click on svg to hide toolset
+            d3.selectAll('svg').on('click', () => {
+              this.showToolSet({visible: false})
+
+              d3.selectAll('circle')
+                .attr('r', 8)
+                .style('fill', mkbcolor)
+            })
+
+            this.postAddLayer(newLayer)
+            this.addTreeData({[newLayer]: taxonomy})
+          } else {
+            alert(data['error'])
+          }
+        })
+      }
+
+      export = () => {
+        const curLayer = this.state.selectedLayer
+        const curLayerTaxo = this.treedata[curLayer]
+        if (curLayerTaxo) {
+          const blob = new Blob([JSON.stringify(curLayerTaxo)], {type: 'application/json'})
+          saveAs(blob)
+        } else {
+          alert('No Layers!')
+        }
+      }
+
+      render = () => (
+        <React.Fragment>
+          <div id='panel'>
+            <AddLayerBtn postAddLayer={this.postAddLayer} showToolSet={this.showToolSet} addTreeData={this.addTreeData} import={this.import} export={this.export}/>
+            <LayerCollection layers={this.state.layers} selectedLayer={this.state.selectedLayer} onSelectLayer={this.selectLayer} showToolSet={this.showToolSet}/>
+            <RedoUndoBtn undoDisabled={this.state.undoDisabled} redoDisabled={this.state.redoDisabled} onUndo={this.undoOrRedo('Undoing')} onRedo={this.undoOrRedo('Redoing')}/>
+          </div>
+
+          <div id='chart'></div>
+          <ToolSet toolset={this.state.toolset} cutOrCloneNode={this.cutOrCloneNode} mergeNode={this.mergeNode} renameNode={this.renameNode} cloneFakeNode={this.cloneFakeNode}/>
+        </React.Fragment>
+
+      )
+    }
+
+    ReactDOM.render(
+      <Dashboard/>,
+      document.getElementById('dashboard')
+    )
+
+  </script>
+
+</body>

@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html>
+<meta charset="utf-8">
+<title>Markable Taxonomy</title>
+<head>
+<script src="js/d3.v4.min.js"></script>
+<script src="js/d3-sankey.js"></script>
+<script src="js/FileSaver.min.js"></script>
+
+<style>
+body {
+  font-family: sans-serif;
+}
+
+#chart {
+  height: 4000px;
+}
+
+.node rect {
+  cursor: move;
+  shape-rendering: crispEdges;
+}
+
+.node text {
+  pointer-events: none;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.link {
+  fill: none;
+  stroke: #ccc;
+}
+
+</style>
+</head>
+<body>
+<div id="chart"></div>
+
+<script>
+var margin = {
+  top: 1,
+  right: 50,
+  bottom: 6,
+  left: 1
+};
+
+which = 'wayfair'
+wh_map = {'wayfair': {'w': 24000, 'h': 6000}, 'amazon_furniture': {'w': 1600, 'h': 1600}}
+
+width = wh_map[which]['w'] - margin.left - margin.right;
+height = wh_map[which]['h'] - margin.top - margin.bottom;
+color = d3.scaleOrdinal(d3.schemeCategory20);
+
+var svg = d3.select("#chart").append("svg")
+  .attr("width", width + margin.left + margin.right)
+  .attr("height", height + margin.top + margin.bottom)
+  .call(d3.zoom().on("zoom", function () {
+    svg.attr("transform", d3.event.transform)
+  }))
+  .append("g")
+  .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+
+var sankey = d3.sankey()
+  .nodeWidth(72)
+  .nodePadding(2)
+  .nodeAlign(d3.sankeyLeft)
+  .size([width, height])
+  .iterations(128);
+
+var tree = d3.tree()
+  .size([width, height])
+
+var cluster = d3.cluster()
+  .size([width, height])
+
+var mkbcolor = "#2AAEA7"
+
+function linkNodes (nodes = [], links = [], id = "id") {
+  if (!Array.isArray(nodes)) throw TypeError("`nodes` needs to be array")
+  if (!Array.isArray(links)) throw TypeError("`links` needs to be array")
+
+  links = links.reduce((_links, link) => {
+    let source
+    let target
+
+    switch (typeof link.source) {
+      case "number":
+        source = nodes[link.source]
+        break
+      case "string":
+        source = nodes.find((node) => node[id] === link.source)
+        break
+      default:
+        source = link.source
+    }
+
+    switch (typeof link.target) {
+      case "number":
+        target = nodes[link.target]
+        break
+      case "string":
+        target = nodes.find((node) => node[id] === link.target)
+        break
+      default:
+        target = link.target
+    }
+
+    const value = (typeof link.value === "undefined") ? 1 : link.value
+
+    link = {
+      ...link,
+      source,
+      target,
+      value,
+    }
+
+    return [
+      ..._links,
+      link,
+    ]
+  }, [])
+
+  return {
+    nodes,
+    links,
+  }
+}
+
+function parseTree (treedata) {
+  var nodes = [];
+  var links = [];
+
+  var cate_subtree = treedata.nodes.category;
+  for (var sup_cate in cate_subtree) {
+    var src = {id: sup_cate, depth: 0};
+    nodes.push(src);
+    cate_subsubtree = cate_subtree[sup_cate];
+    for (var sub_cate in cate_subsubtree) {
+      var tgt = {id: sup_cate + "." + sub_cate, depth: 1};
+      nodes.push(tgt);
+      links.push({source: src, target: tgt, value: 1});
+    }
+  }
+
+  for (var rel in treedata.links) {
+    var lr = rel.split('-');
+    var ltree = cate_subtree;
+    var rtree = cate_subtree
+
+    var rel_subtree = treedata.links[rel];
+    for (var src_key in rel_subtree) {
+      tgt_key = rel_subtree[src_key];
+
+      if (src_key == "all")
+        src_key = Object.keys(ltree);
+      else if (typeof ltree[src_key] == "object")
+        src_key = Object.keys(ltree[src_key]).map((key) => src_key + "." + key);
+      else
+        src_key = [src_key];
+      src_nodes = nodes.filter((node) => src_key.includes(node.id));
+
+      if (tgt_key == "all") tgt_key = Object.keys(rtree);
+
+      tgt_nodes = nodes.filter((node) => tgt_key.includes(node.id));
+
+      src_nodes.forEach(src => {
+        tgt_nodes.forEach(tgt => {
+          links.push({source: src, target: tgt, value: 1});
+        })
+      })
+    }
+  }
+
+  return {nodes, links};
+}
+
+
+const parseTree2 = (treedata) => {
+  let nodes = []
+  let links = []
+
+  let nodes_ = {}
+  Object.entries(treedata).forEach(([tgt_hash, info], i) => {
+    const path = info.path.split(',')
+    let src, tgt
+
+    if (!nodes_.hasOwnProperty(tgt_hash)) {
+      tgt = {id: tgt_hash, name: info.name, depth: path.length-1, url: info.url}
+      nodes.push(tgt)
+      nodes_[tgt_hash] = tgt
+    }
+    tgt = nodes_[tgt_hash]
+
+    if (path.length-1) {
+      const src_hash = path[path.length-2]
+      if (!nodes_.hasOwnProperty(src_hash)) {
+        src = {id: src_hash, name: treedata[src_hash].name, depth: path.length-2, url: treedata[src_hash].url}
+        nodes.push(src)
+        nodes_[src_hash] = src
+      }
+      src = nodes_[src_hash]
+
+      links.push({source: src, target: tgt, value: 1})
+    }
+  })
+
+  return {nodes, links}
+}
+
+const convertToHierarchy = ({nodes, links}) => {
+  return [{...nodes.filter(d => d.depth === 0)[0], parent: ""}, ...links.reduce((agg, l) =>
+    {agg.push({...l.target, parent: l.source.id}); return agg}, [])]
+}
+
+
+d3.json(which+"_taxonomy.json", function(treedata_orig) {
+
+  /*
+  const input_data = {
+    nodes: [
+      {
+        id: 'Alice',
+        depth: 0
+      },
+      {
+        id: 'Bob',
+        depth: 1
+      },
+      {
+        id: 'Carol',
+        depth: 2
+      }
+    ],
+    links: [
+      {
+        source: 'Alice',
+        target: 'Bob',
+      },
+      {
+        source: 'Bob',
+        target: 'Carol',
+      }
+    ],
+  }
+  */
+  // *********** different input data format ********************************
+  // treedata = linkNodes(input_data.nodes, input_data.links, 'id') // simple format as above
+  // treedata = parseTree(treedata_orig); // for markable fashion tree format
+  treedata = parseTree2(treedata_orig); // for markable fashion tree format
+  // ************************************************************************
+
+  // *********************** different graph layout **************************
+
+  let deep = false;
+
+  // -------------------- start of sankey graph ----------------------------------
+  /*
+  graph = sankey(treedata);
+
+  var link = svg.append("g").selectAll(".link")
+    .data(treedata.links)
+    .enter().append("path")
+    .attr("class", "link")
+    .attr("d", d3.sankeyLinkHorizontal())
+    .style("stroke-opacity", .25)
+    .style("stroke-width", d => Math.min(2, d.width))
+    .on("mouseover", (d,i) => {
+      hlLink(d, on=true, deep=deep);
+    })
+    .on("mouseout", (d,i) => {
+      hlLink(d, on=false, deep=deep);
+    });
+
+  var node = svg.append("g").selectAll(".node")
+    .data(treedata.nodes)
+    .enter().append("g")
+    .attr("class", "node")
+    .on("contextmenu", (d,i) => {
+      d3.event.preventDefault()})
+    // .on("click", (d,i) => showExample(d)) // for markable fashion tree format
+    .on("click", (d,i) => {let win = window.open(d.url, '_blank'); win.focus()})
+    .call(d3.drag()
+        .filter(() => d3.event.button === 2)
+        // .subject(function(d) {return d})
+        .on("drag", function(d) {
+          var rectY = d3.select(this).select("rect").attr("y");
+          d.y0 = d.y0 + d3.event.dy;
+          d.y1 = d.y1 + d3.event.dy;
+          var yTranslate = d.y0 - rectY;
+
+          d3.select(this).attr("transform", "translate(" +[0, yTranslate] + ")");
+
+          sankey.update(graph);
+          link.attr("d", d3.sankeyLinkHorizontal());
+        }));
+
+  node.append("rect")
+    .attr("x", d => d.x0)
+    .attr("y", d => d.y0)
+    .attr("height", d => d.y1 - d.y0)
+    .attr("width", d => d.x1 - d.x0)
+    .style("fill", mkbcolor)
+    .style("opacity", .5)
+    .on("mouseover", (d,i) => {
+      hlNode(d, on=true, deep=deep);
+    })
+    .on("mouseout", (d,i) => {
+      hlNode(d, on=false, deep=deep);
+    })
+    .append("title")
+    // .text(d => d.id); // for markable fashion tree format
+    .text(d => d.url);
+
+  node.append("text")
+    .attr("x", d => (d.x0 + d.x1) / 2)
+    .attr("y", d => (d.y1 + d.y0) / 2)
+    .attr("dy", ".35em")
+    .attr("text-anchor", "middle")
+    .style("fill", d => d3.rgb(d.color).darker(2.4))
+    // .text(d => d.id.split('.').slice(-1)[0]); // for markable fashion tree format
+    .text(d => d.name);
+    */
+  // -------------------- end of sankey graph----------------------
+
+
+  // ------------------- start of tree/dendrogram graph ----------------------
+
+  var root = d3.stratify()
+    .id(d => d.id)
+    .parentId(d => d.parent)
+    (convertToHierarchy(treedata))
+    .sort((a, b) => (a.height - b.height))
+
+  var link = svg.selectAll(".link")
+    .data(tree(root).links()) // or tree(root)
+    .enter().append("path")
+    .attr("class", "link")
+  // .attr("fill","none")   // overwritten by header style
+  // .attr("stroke","#ccc")
+    .attr("d", d => "M" + d.source.y + "," + d.source.x
+          + "C" + (d.source.y +100) + "," + d.source.x
+          + " " + (d.source.y +100) + "," + d.target.x
+          + " " + d.target.y + "," + d.target.x)
+    .on("mouseover", (d,i) => {
+      hlTreeLink(d, on=true, deep=deep);
+    })
+    .on("mouseout", (d,i) => {
+      hlTreeLink(d, on=false, deep=deep);
+    });
+
+  var node = svg.selectAll(".node")
+    .data(root.descendants())
+    .enter().append("g")
+    .attr("class", function(d) { return "node" + (d.children ? " node--internal" : " node--leaf"); })
+    .attr("transform", function(d) { return "translate(" + d.y + "," + d.x + ")"; })
+    .on("click", (d,i) => {let win = window.open(d.data.url, '_blank'); win.focus()})
+
+  node.append("circle")
+    .attr("r", 8)
+    .style("fill", mkbcolor)
+    // .style("opacity", .5)
+    .on("mouseover", (d, i) => {
+      hlTreeNode(d, on=true, deep=deep);
+    })
+    .on("mouseout", (d, i) => {
+      hlTreeNode(d, on=false, deep=deep);
+    })
+    .append("svg:title")
+    .text(d => d.data.url)
+
+  node.append("text")
+    .text(d => d.data.name)
+	//  .attr('y',5)
+  //  .attr('x', 80)
+    .attr('y', 5)
+    .attr('x', d => d.children ? -13 : 13)
+    .attr('text-anchor', d => d.children ? "end" : "start")
+
+
+  // -------------------- end of tree/dendrogram graph----------------------
+
+  // ************************************************************************
+
+})
+
+function exportNodePos(filename="nodepos.json") {
+  let pos = {};
+
+  d3.selectAll(".node").each((d) => {
+    pos[d.id] = {
+        "x0": d.x0,
+        "x1": d.x1,
+        "y0": d.y0,
+        "y1": d.y1,
+    }
+  })
+
+  var blob = new Blob([JSON.stringify(pos)], {type: "application/json"});
+  saveAs(blob, filename);
+}
+
+function loadNodePos(graph, filename="nodepos.json") {
+  d3.json("nodepos.json", function(pos) {
+    _node = d3.selectAll(".node")
+      .filter((d, i) => d.id in pos)
+      .attr("transform", null);
+
+    _node.select("rect")
+      .attr("x", d => pos[d.id].x0)
+      .attr("y", d => pos[d.id].y0);
+
+    _node.select("text")
+      .attr("x", d => (pos[d.id].x0 + pos[d.id].x1) / 2)
+      .attr("y", d => (pos[d.id].y0 + pos[d.id].y1) / 2);
+
+    graph.nodes.filter((node) => node.id in pos)
+      .forEach(node => {
+        node.x0 = pos[node.id].x0
+        node.x1 = pos[node.id].x1
+        node.y0 = pos[node.id].y0
+        node.y1 = pos[node.id].y1
+    })
+
+    sankey.update(graph);
+    d3.selectAll(".link")
+      .attr("d", d3.sankeyLinkHorizontal());
+  })
+}
+
+function showExample(node) {
+  var _node = d3.selectAll(".node")
+    .filter((d,i) => i === node.index && d.depth === 1);
+  if (_node.select("image").empty()) {
+    _node.append("svg:image")
+      .attr("x", d => d.x1 + 9)
+      .attr("y", d => _node.select("rect").attr("y"))
+      .attr("height", d => d.y1 - d.y0)
+      .attr("xlink:href", d => "images/" +
+          d.id.split('.').slice(-1)[0] + ".png")
+      .append("title")
+      .text(d => d.id);
+  } else {
+    _node.select("image").remove();
+  }
+
+
+}
+
+function hlNode(node, on=true, deep=false, direction="lr") {
+  d3.selectAll(".node")
+    .filter((d, i) => i == node.index)
+    .select("rect")
+    .style("opacity", on ? 1 : .5);
+
+
+  if (direction === "r" || direction === "lr") {
+    node.sourceLinks.forEach(l => {
+      d3.selectAll(".link")
+        .filter((d, i) => i == l.index)
+        .style("stroke", on ? mkbcolor : "#000")
+        .style("stroke-width", on ? 6 : 2)
+        .style("stroke-opacity", on ? 1 : .25);
+
+      d3.selectAll(".node")
+        .filter((d, i) => i == l.target.index)
+        .select("rect")
+        .style("opacity", on ? 1 : .5);
+
+      if (deep) hlNode(l.target, on, deep, "r");
+    })
+  }
+
+  if (direction === "l" || direction === "lr") {
+    node.targetLinks.forEach(l => {
+      d3.selectAll(".link")
+        .filter((d, i) => i == l.index)
+        .style("stroke", on ? mkbcolor : "#000")
+        .style("stroke-width", on ? 6 : 2)
+        .style("stroke-opacity", on ? 1 : .25);
+
+      d3.selectAll(".node")
+        .filter((d, i) => i == l.source.index)
+        .select("rect")
+        .style("opacity", on ? 1 : .5);
+
+      if (deep) hlNode(l.source, on, deep, "l");
+    })
+  }
+}
+
+function hlLink(link, on=true, deep=false, direction="lr") {
+  d3.selectAll(".link")
+    .filter((d, i) => i == link.index)
+    .style("stroke", on ? mkbcolor : "#000")
+    .style("stroke-width", on ? 6 : 2)
+    .style("stroke-opacity", on ? 1 : .25);
+
+  if (!deep) {
+    d3.selectAll(".node")
+      .filter((d, i) => i == link.source.index || i == link.target.index)
+      .select("rect")
+      .style("opacity", on ? 1 : .5);
+    return;
+  }
+
+  if (direction === "r" || direction === "lr")
+    hlNode(link.target, on, deep, "r");
+  if (direction === "l" || direction === "lr")
+    hlNode(link.source, on, deep, "l");
+}
+
+
+function hlTreeNode(node, on=true, deep=false, direction="lr") {
+  d3.selectAll("circle")
+    .filter((d, i) => d.id == node.id)
+    .attr("r", on ? 10 : 8)
+    .style("fill", on ? '#d159cc' : mkbcolor)
+
+  if (direction === "r" || direction === "lr") {
+    d3.selectAll(".link")
+      .filter((d, i) => d.source.id == node.id)
+      .style("stroke", on ? mkbcolor : "#ccc")
+      .style("stroke-width", on ? 3 : 1)
+
+    if (node.children) {
+      node.children.forEach(childnode => {
+        d3.selectAll("circle")
+          .filter((d, i) => d.id == childnode.id)
+          .attr("r", on ? 10 : 8)
+          .style("fill", on ? '#d159cc' : mkbcolor)
+
+        if (deep) hlTreeNode(childnode, on, deep, "r")
+      })
+    }
+  }
+
+  if (direction === "l" || direction === "lr") {
+    d3.selectAll(".link")
+      .filter((d, i) => d.target.id == node.id)
+      .style("stroke", on ? mkbcolor : "#ccc")
+      .style("stroke-width", on ? 3 : 1)
+
+    const parentnode = node.parent
+    if (parentnode) {
+      d3.selectAll("circle")
+        .filter((d, i) => d.id == parentnode.id)
+        .attr("r", on ? 10 : 8)
+        .style("fill", on ? '#d159cc' : mkbcolor)
+
+      if (deep) hlTreeNode(parentnode, on, deep, "l")
+    }
+  }
+}
+
+function hlTreeLink(link, on=true, deep=false, direction="lr") {
+  d3.selectAll(".link")
+    .filter((d, i) => d.source.id == link.source.id && d.target.id == link.target.id)
+    .style("stroke", on ? mkbcolor : "#ccc")
+    .style("stroke-width", on ? 3 : 1)
+
+  if (!deep) {
+    d3.selectAll("circle")
+      .filter((d, i) => d.id == link.source.id || d.id == link.target.id)
+      .attr("r", on ? 10 : 8)
+      .style("fill", on ? '#d159cc' : mkbcolor)
+    return;
+  }
+
+  if (direction === "r" || direction === "lr")
+    hlTreeNode(link.target, on, deep, "r");
+  if (direction === "l" || direction === "lr")
+    hlTreeNode(link.source, on, deep, "l");
+}
+
+</script>
+
+</body>

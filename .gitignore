@@ -1,0 +1,12 @@
+scraper/node_modules/
+scraper/taxonomy/
+scraper/pyscripts/__pycache__/
+data/
+*.json
+*proxy.txt
+*proxy-whitepool.txt
+*scrapoxy_config.json
+*.rdb
+.*
+!.gitignore
+!.dockerignore
