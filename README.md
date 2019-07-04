@@ -28,6 +28,7 @@ So far, we have the taxonomy tree, and each leaf node's products with images and
 
 + Parser
 
+### Example usage
 
 ### Scale up
 The scraper can run within the docker:
